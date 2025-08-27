@@ -15,13 +15,6 @@ import copy
 
 # from magicdrivedit.acceleration.communications import all_to_all
 
-def bp():
-   import sys, pudb
-   import torch.distributed as dist
-   ok_rank = (not dist.is_available()) or (not dist.is_initialized()) or dist.get_rank() == 0
-   if ok_rank and sys.stdin.isatty():  # 只有有终端的 rank0 才停
-      pudb.set_trace()
-
 @SCHEDULERS.register_module("ucgm", force=True)
 class UCGMScheduler(FewstepScheduler):
 
@@ -317,8 +310,14 @@ class UCGMScheduler(FewstepScheduler):
                   model_for_consist = model
                _, _, F_th_r, den_r, consist_outs = self.forward(model_for_consist, xr, r, **model_kwargs)
                if self.enhanced_ratio != 0.0:  # use enhanced zs_target & enhanced xs_target
-                  xr = zs_target * self.alpha_in(r) + xs_target * self.gamma_in(r)
-               pred_x = (F_th_r * self.alpha_in(r) - xr * self.alpha_to(r)) / den_r
+                  # Fix broadcasting issue: ensure proper tensor dimensions
+                  alpha_r = torch.as_tensor(self.alpha_in(r), device=zs_target.device, dtype=zs_target.dtype).view(-1, 1, 1, 1, 1)
+                  gamma_r = torch.as_tensor(self.gamma_in(r), device=xs_target.device, dtype=xs_target.dtype).view(-1, 1, 1, 1, 1)
+                  xr = zs_target * alpha_r + xs_target * gamma_r
+               # Fix broadcasting for pred_x calculation
+               alpha_r = torch.as_tensor(self.alpha_in(r), device=F_th_r.device, dtype=F_th_r.dtype).view(-1, 1, 1, 1, 1)
+               alpha_to_r = torch.as_tensor(self.alpha_to(r), device=xr.device, dtype=xr.dtype).view(-1, 1, 1, 1, 1)
+               pred_x = (F_th_r * alpha_r - xr * alpha_to_r) / den_r
                return pred_x, consist_outs
 
             # Calculate the derivative of f^x_t w.r.t. t
@@ -331,15 +330,21 @@ class UCGMScheduler(FewstepScheduler):
             else:
                epsilon = t - self.consistc_ratio * t
                fc1_dt = 1 / epsilon
-               x_t = zs_target * self.alpha_in(t) + xs_target * self.gamma_in(t)
-               predict_ex = F_th_t.data * self.alpha_in(t) - x_t * self.alpha_to(t)
+               # Fix broadcasting issue: ensure proper tensor dimensions
+               alpha_t = torch.as_tensor(self.alpha_in(t), device=zs_target.device, dtype=zs_target.dtype).view(-1, 1, 1, 1, 1)
+               gamma_t = torch.as_tensor(self.gamma_in(t), device=xs_target.device, dtype=xs_target.dtype).view(-1, 1, 1, 1, 1)
+               alpha_to_t = torch.as_tensor(self.alpha_to(t), device=F_th_t.device, dtype=F_th_t.dtype).view(-1, 1, 1, 1, 1)
+               x_t = zs_target * alpha_t + xs_target * gamma_t
+               predict_ex = F_th_t.data * alpha_t - x_t * alpha_to_t
                x_t_minus_e, x_t_minus_outs = xfunc(t - epsilon)
                df_dv_dt = predict_ex / den_t * fc1_dt - x_t_minus_e * fc1_dt
             # Calculate the learning target for F_{\theta}
             df_dv_dt = torch.clamp(df_dv_dt, min=-1, max=1)
             # weight_fc = 4 / torch.sin(t * np.pi / 2).clamp(min=0.01)
             weight_fc = 4 / torch.sin(t * 1.57)
-            target = F_th_t.data - (self.alpha_in(t) / den_t * weight_fc) * df_dv_dt
+            # Fix broadcasting issue: ensure proper tensor dimensions
+            alpha_t_final = torch.as_tensor(self.alpha_in(t), device=F_th_t.device, dtype=F_th_t.dtype).view(-1, 1, 1, 1, 1)
+            target = F_th_t.data - (alpha_t_final / den_t * weight_fc.view(-1, 1, 1, 1, 1)) * df_dv_dt
       # Fix: NC should be number of cameras, not batch size
       # cams shape: [B*NC, T, 1, 3, 7], so NC = cams.shape[0] // B
       B = x_start.shape[0]

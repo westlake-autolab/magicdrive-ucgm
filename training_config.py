@@ -1,6 +1,6 @@
 # Dataset settings
 num_frames = None
-micro_frame_size = 4
+micro_frame_size = 8
 bbox_mode = 'all-xyz'
 
 data_cfg_names = [
@@ -137,8 +137,8 @@ batch_size = 1  # CHANGED
 drop_cond_ratio = 0.15
 
 # Acceleration settings
-num_workers = 4
-prefetch_factor = 4
+num_workers = 2
+prefetch_factor = 2
 num_bucket_build_workers = 16
 
 # Model settings
@@ -286,7 +286,6 @@ val = dict(
     num_sample=2,
     save_fps=None,  # CHANGED
     seed=1024,
-    cpu_offload=True,
     scheduler = dict(
         **scheduler,
         num_sampling_steps=30,

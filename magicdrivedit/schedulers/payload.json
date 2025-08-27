@@ -1,0 +1,7 @@
+﻿{
+  "model": "claude-sonnet-4-20250514-thinking",
+  "messages": [
+    { "role": "user", "content": "Say this is a test!" }
+  ],
+  "temperature": 0.7
+}

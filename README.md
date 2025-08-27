@@ -80,3 +80,4 @@ These modifications are designed to be drop-in replacements for the original Mag
 
 ---
 *Created for enhanced MagicDrive-V2 training stability and debugging*
+

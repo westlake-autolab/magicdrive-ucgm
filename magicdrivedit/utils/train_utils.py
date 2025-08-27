@@ -104,7 +104,7 @@ def run_validation(val_cfg, text_encoder, vae, model, device, dtype,
                 model_args["bbox"] = move_to(new_bbox, device=device, dtype=dtype)
             # == add null condition ==
             # y is handled by scheduler.sample
-            if (val_cfg.scheduler.type == "dpm-solver" and val_cfg.scheduler.cfg_scale == 1.0) or val_cfg.scheduler.type == "ucgm":
+            if (val_cfg.scheduler.type == "dpm-solver" and val_cfg.scheduler.cfg_scale == 1.0) or val_cfg.scheduler.type in ["rflow-slice", "ucgm"]:
                 _model_args = copy.deepcopy(model_args)
             else:
                 _model_args = add_null_condition(
