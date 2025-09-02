@@ -1,18 +1,36 @@
 # Dataset settings
 num_frames = None
-micro_frame_size = 1
+micro_frame_size = 8
 bbox_mode = 'all-xyz'
 
 data_cfg_names = [
     ((224, 400), "Nuscenes_map_cache_box_t_with_n2t_12Hz"),
+
 ]
+    #((424, 800), "Nuscenes_400_map_cache_box_t_with_n2t_12Hz"),
+    #((848, 1600), "Nuscenes_400_map_cache_box_t_with_n2t_12Hz_848x1600"),
 video_lengths_fps = {  # all lengths are 8n or 8n+1
     "224x400": [
-        [17],  # 只使用单帧，最省显存
+        [9],  # min=187, max=241
         [[12,]],
         [1],  # repeat time
-    ],
+    ]
+
 }
+"""
+,
+    "424x800": [
+        [1, 17, 33,], # changed
+        [[120,], [12,], [12,]], # changed
+        [1, 1, 1,],
+    ]
+    ,
+    "848x1600": [
+    [1, 9, 17, 33,],
+    [[120,], [12,], [12], [12],],
+    [1, 1, 1, 1],
+    ]
+"""
 balance_keywords = ["night", "rain", "none"]
 dataset_cfg_overrides = [
     (
@@ -31,7 +49,37 @@ dataset_cfg_overrides = [
         ("dataset.data.val.fps", video_lengths_fps["224x400"][1]),
         ("+dataset.data.val.micro_frame_size", micro_frame_size), 
     ),
+
 ]
+
+"""
+ (
+        # key, value
+        ("dataset.data.train.ann_file", "./data/nuscenes_mmdet3d-12Hz/nuscenes_interp_12Hz_infos_train_with_bid.pkl"),
+        ("dataset.data.val.ann_file", "./data/nuscenes_mmdet3d-12Hz/nuscenes_interp_12Hz_infos_val_with_bid.pkl"),
+        ("dataset.data.train.type", "NuScenesVariableDataset"),
+        ("dataset.data.val.type", "NuScenesVariableDataset"),
+        ("dataset.data.train.video_length", video_lengths_fps["424x800"][0]),
+        ("dataset.data.train.fps", video_lengths_fps["424x800"][1]),
+        ("+dataset.data.train.repeat_times", video_lengths_fps["424x800"][2]), 
+        ("+dataset.data.train.balance_keywords", balance_keywords), 
+        ("dataset.data.val.video_length", video_lengths_fps["424x800"][0]),
+        ("dataset.data.val.fps", video_lengths_fps["424x800"][1]),
+    ),
+    (
+            # key, value
+        ("dataset.data.train.ann_file", "./data/nuscenes_mmdet3d-12Hz/nuscenes_interp_12Hz_infos_train_with_bid.pkl"),
+        ("dataset.data.val.ann_file", "./data/nuscenes_mmdet3d-12Hz/nuscenes_interp_12Hz_infos_val_with_bid.pkl"),
+        ("dataset.data.train.type", "NuScenesVariableDataset"),
+        ("dataset.data.val.type", "NuScenesVariableDataset"),
+        ("dataset.data.train.video_length", video_lengths_fps["848x1600"][0]),
+        ("dataset.data.train.fps", video_lengths_fps["848x1600"][1]),
+        ("+dataset.data.train.repeat_times", video_lengths_fps["848x1600"][2]), 
+        ("+dataset.data.train.balance_keywords", balance_keywords), 
+        ("dataset.data.val.video_length", video_lengths_fps["848x1600"][0]),
+        ("dataset.data.val.fps", video_lengths_fps["848x1600"][1]),
+    ),
+"""
 
 img_collate_param_train = dict(
     # template added by code.
@@ -49,6 +97,7 @@ img_collate_param_train = dict(
 bucket_config = { 
     "224-400-120-1": 10,
     "224-400-12-17": 10,
+    "224-400-12-9": 10,
     "224-400-12-full": 1,  # 17-20s/it, variable length, must be 1
 
     "424-800-120-1": 10,
@@ -58,53 +107,38 @@ bucket_config = {
     # "424-800-12-65": 1,
     "424-800-12-129": 1,  # 1: 34-38s/it
     # "424-800-12-129": -1,
+}
+# no need to change this!
 
+"""
     "848-1600-120-1": 10,  # 32s/it
     "848-1600-12-9": 3,  # 3: 38-42s/it, 4: 50s/it
     "848-1600-12-17": 2,  # 1: 20s/it, 2: 39-41s/it
     "848-1600-12-33": 1,  # 36-40s/it
-}
-# no need to change this!
+"""
 
 validation_index = [
-     "1828-848-1600-12-17",
-     "5543-848-1600-12-17",
-     "6720-848-1600-12-17",
-    "14449-848-1600-12-17",
 
-     "5538-848-1600-12-33",
-    "14631-848-1600-12-33",
-     "6720-848-1600-12-33",
-    "14449-848-1600-12-33",
-     "3649-848-1600-12-33",  # know
 
-     "912-424-800-12-129",
-    "1680-424-800-12-129",
-    "3657-424-800-12-129",
+     "24-224-400-12-9",
+    "145-224-400-12-9",
+    "105-224-400-12-9",
 
-     "24-224-400-12-full",
-    "145-224-400-12-full",
-    "105-224-400-12-full",
-
-    "8726-848-1600-120-1",
-
-    "5543-424-800-12-33",  # know
-    "5543-848-1600-12-33",  # know
 ]
 validation_before_run = False  # just don't use it!
 
 
 # Runner
 dtype = "bf16"
-sp_size = 4  # 先禁用序列并行避免通信问题
+sp_size = 8
 plugin = "zero2-seq" if sp_size > 1 else "zero2"
 grad_checkpoint = True  # CHANGED
-batch_size = 1  # 保持最小batch size
+batch_size = 1  # CHANGED
 drop_cond_ratio = 0.15
 
 # Acceleration settings
-num_workers = 1
-prefetch_factor = 1
+num_workers = 2
+prefetch_factor = 2
 num_bucket_build_workers = 16
 
 # Model settings
@@ -217,12 +251,34 @@ text_encoder = dict(
     shardformer=True,
 )
 scheduler = dict(
-    type="rflow",
+    type="ucgm",
+    transport_type="Linear",
+    consistc_ratio=1.0,  # CHANGED: 1.0=consistency model
+    enhanced_target_config=dict(
+        lab_drop_ratio= 0.1,
+        enhanced_use_ema=True,  
+        enhanced_ratio=0.57,         # notes from ucgm
+        enhanced_style="fc-vs-fe",
+        enhanced_range=[0.00, 0.75],
+    ),
+    loss_config=dict(
+        scaled_cbl_eps=5.0,  
+        wt_cosine_loss=False, 
+        weight_function="Cosine",
+        dispersive_loss_weight=None,# 分散性损失权重
+        mean_var_loss_weight=None,  # 均值方差损失权重
+    ),
+    time_dist_ctrl=[1.0, 1.0, 1.0], 
+    infer_config=dict(
+        time_dist_ctrl=[1.0, 1.0, 1.0],
+        stochast_ratio=0.0, 
+        extrapol_ratio=0.0,
+        sampling_order=1,
+        rfba_gap_steps=[0.02, 0.4],
+    ),
     use_timestep_transform=True,
-    cog_style_trans=True,  # NOTE: trigger error with 9-frame, should change in all cases when frame > 1.
-    sample_method="logit-normal",
+    cog_style_trans=True,
 )
-
 
 val = dict(
     validation_index=validation_index,
@@ -231,10 +287,9 @@ val = dict(
     num_sample=2,
     save_fps=None,  # CHANGED
     seed=1024,
-    cpu_offload=True,
     scheduler = dict(
         **scheduler,
-        num_sampling_steps=30,
+        num_sampling_steps=50,
         cfg_scale=2.0,  # base value 1, 0 is uncond
     ),
 )
@@ -258,16 +313,16 @@ mask_ratios = {
 seed = 1024
 outputs = "outputs"
 wandb = False
-epochs = 1
+epochs = 5
 log_every = 1
-ckpt_every = 250 * 5
+ckpt_every = 250
 report_every = ckpt_every
 
 # optimization settings
 load = None
 grad_clip = 0.5
-lr = 5e-6
-ema_decay = 0.99
+lr = 2e-5
+ema_decay = 0.999  # ucgm recommended
 adam_eps = 1e-15
 weight_decay = 1e-2
 warmup_steps = 100                         

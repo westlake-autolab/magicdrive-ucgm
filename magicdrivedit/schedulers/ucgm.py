@@ -11,7 +11,9 @@ from magicdrivedit.schedulers.scheduler import FewstepScheduler
 from magicdrivedit.schedulers.rf.rectified_flow import timestep_transform
 from magicdrivedit.schedulers.transports import TRANSPORTS
 from magicdrivedit.utils.inference_utils import replace_with_null_condition
+from magicdrivedit.utils.ckpt_utils import drop_condition
 import copy
+import web_pdb
 
 # from magicdrivedit.acceleration.communications import all_to_all
 
@@ -23,7 +25,7 @@ class UCGMScheduler(FewstepScheduler):
                 transport_type: str = "ReLinear",
                 consistc_ratio: float = 0.0,
                 enhanced_target_config=dict(
-                  # lab_drop_ratio= 0.1,
+                  lab_drop_ratio= 0.1,
                   enhanced_use_ema=True,
                   enhanced_ratio=0.0,
                   enhanced_style=None,
@@ -52,7 +54,7 @@ class UCGMScheduler(FewstepScheduler):
       self.cog_style_trans = cog_style_trans
 
       self.consistc_ratio = consistc_ratio
-      # self.lab_drop_ratio = enhanced_target_config['lab_drop_ratio']
+      self.lab_drop_ratio = enhanced_target_config['lab_drop_ratio']
       self.enhanced_use_ema = enhanced_target_config['enhanced_use_ema']
       self.enhanced_ratio = enhanced_target_config['enhanced_ratio']
       self.enhanced_style = enhanced_target_config['enhanced_style']
@@ -122,42 +124,31 @@ class UCGMScheduler(FewstepScheduler):
       return (1 - (1 - t**a) ** b) ** c
 
    def add_noise(self, x_start, noise, t):
-      # Reshape for proper broadcasting: [B] -> [B, 1, 1, 1, 1]
-      alpha_t = torch.as_tensor(self.alpha_in(t), device=x_start.device, dtype=x_start.dtype).view(-1, 1, 1, 1, 1)
-      gamma_t = torch.as_tensor(self.gamma_in(t), device=x_start.device, dtype=x_start.dtype).view(-1, 1, 1, 1, 1)
-      x_t = alpha_t * noise + gamma_t * x_start
-      return x_t
+      return self.alpha_in(t) * noise + self.gamma_in(t) * x_start
 
    def predict(self, x_hat, z_hat, t_next, noise=0.0, stochast_ratio=0.0):
-      # Reshape for proper broadcasting: [B] -> [B, 1, 1, 1, 1]
-      alpha_t = torch.as_tensor(self.alpha_in(t_next), device=x_hat.device, dtype=x_hat.dtype).view(-1, 1, 1, 1, 1)
-      gamma_t = torch.as_tensor(self.gamma_in(t_next), device=x_hat.device, dtype=x_hat.dtype).view(-1, 1, 1, 1, 1)
-      x_next = alpha_t * z_hat * ((1 - stochast_ratio)**0.5) + gamma_t * x_hat
+      x_next = self.alpha_in(t_next) * z_hat * ((1 - stochast_ratio)**0.5) + self.gamma_in(t_next) * x_hat
       x_next += noise * (stochast_ratio ** 0.5)
       return x_next
 
    def predict_heun(self, x_cur, z_hat, z_pri, t, t_next, noise=0.0, stochast_ratio=0.0):
-      # Reshape for proper broadcasting: [B] -> [B, 1, 1, 1, 1]
-      a = torch.as_tensor(self.gamma_in(t_next) / self.gamma_in(t), device=x_cur.device, dtype=x_cur.dtype).view(-1, 1, 1, 1, 1)
-      b = torch.as_tensor(0.5 * self.alpha_in(t_next) - self.gamma_in(t_next) * self.alpha_in(t) / self.gamma_in(t), device=x_cur.device, dtype=x_cur.dtype).view(-1, 1, 1, 1, 1)
+      a = self.gamma_in(t_next) / self.gamma_in(t)
+      b = 0.5 * self.alpha_in(t_next) - self.gamma_in(t_next) * self.alpha_in(t) / self.gamma_in(t)
       x_next = a * x_cur + b * (z_hat + z_pri)
       return x_next
 
    def forward(self, model, x_t=None, t=None, **model_kwargs):
-      # Reshape for proper broadcasting: [B] -> [B, 1, 1, 1, 1]
-      alpha_in_t = torch.as_tensor(self.alpha_in(t), device=x_t.device, dtype=x_t.dtype).view(-1, 1, 1, 1, 1)
-      gamma_in_t = torch.as_tensor(self.gamma_in(t), device=x_t.device, dtype=x_t.dtype).view(-1, 1, 1, 1, 1)
-      alpha_to_t = torch.as_tensor(self.alpha_to(t), device=x_t.device, dtype=x_t.dtype).view(-1, 1, 1, 1, 1)
-      gamma_to_t = torch.as_tensor(self.gamma_to(t), device=x_t.device, dtype=x_t.dtype).view(-1, 1, 1, 1, 1)
+      dent = self.alpha_in(t) * self.gamma_to(t) - self.gamma_in(t) * self.alpha_to(t)
       
-      dent = alpha_in_t * gamma_to_t - gamma_in_t * alpha_to_t
-      
-      # 现在t应该已经是正确的1D tensor [batch_size]
-      _t = t if self.integ_st == 1 else 1 - t
+      # Create properly shaped timestep tensor
+      _t = torch.ones(x_t.shape[0], device=x_t.device) * t.flatten()
+      _t = _t if self.integ_st == 1 else 1 - _t
       unscaled_t = _t * self.num_timesteps
       unscaled_t = unscaled_t.to(dtype=x_t.dtype)
 
       _out = model(x_t, unscaled_t, **model_kwargs)
+      #rank = torch.cuda.current_device()
+      #web_pdb.set_trace(host='127.0.0.1', port=5599+rank)
       if isinstance(_out, tuple):
           F_t0 = _out[0]
           outs = _out[1] if len(_out) > 1 else {}
@@ -169,8 +160,8 @@ class UCGMScheduler(FewstepScheduler):
           F_t0 = _out
           outs = {}
       F_t = (-1) ** (1 - self.integ_st) * F_t0
-      z_hat = (x_t * gamma_to_t - F_t * gamma_in_t) / dent
-      x_hat = (F_t * alpha_in_t - x_t * alpha_to_t) / dent
+      z_hat = (x_t * self.gamma_to(t) - F_t * self.gamma_in(t)) / dent
+      x_hat = (F_t * self.alpha_in(t) - x_t * self.alpha_to(t)) / dent
       return x_hat, z_hat, F_t, dent, outs
 
    def enhance_target(self, target, enhance_idxs, pred_w_c, pred_wo_c):
@@ -183,11 +174,13 @@ class UCGMScheduler(FewstepScheduler):
       return target
 
    def prepare_training_timestamps(self, x_start, model_kwargs):
-      t = self.sample_beta(self.time_dist_ctrl[0], self.time_dist_ctrl[1], [x_start.size(0)]).to(x_start.device)
+      t = self.sample_beta(self.time_dist_ctrl[0], self.time_dist_ctrl[1], [x_start.size(0), 1, 1, 1, 1]).to(x_start.device)
       t0 = t
       if self.use_timestep_transform:
-         # t现在已经是1D tensor，直接调用timestep_transform
-         t = timestep_transform(t, model_kwargs, num_timesteps=1, cog_style=self.cog_style_trans)
+         t_flat = t.flatten()  # [B*1*1*1*1] -> [B]
+         t_transformed = timestep_transform(t_flat, model_kwargs, num_timesteps=1, cog_style=self.cog_style_trans)
+         # 重新reshape为5D
+         t = t_transformed.view(-1, 1, 1, 1, 1)
       return t.to(x_start)
 
    def ddm_training_losses(self,
@@ -205,7 +198,7 @@ class UCGMScheduler(FewstepScheduler):
                            step=0):
       device = x_start.device
       dtype = x_start.dtype
-      
+
       if hasattr(model, 'module'):
          model_module = model.module
       else:
@@ -220,15 +213,16 @@ class UCGMScheduler(FewstepScheduler):
       H = H // 2
       W = W // 2
 
-      # dropped = torch.rand([B], dtype=torch.float32, device=device) < self.lab_drop_ratio
-      dropped = model_kwargs['drop_cond_mask']
+      dropped = torch.rand([B], dtype=torch.float32, device=device) < self.lab_drop_ratio
+      #dropped = model_kwargs['drop_cond_mask']
 
-      """
       model_kwargs = drop_condition(model_kwargs,
          model_module.camera_embedder.uncond_cam.to(device),
          model_module.frame_embedder.uncond_cam.to(device),
          nulls['y'],
-         ["y", "cams", "rel_pos", "bbox"], drop_mask=dropped)
+         ["y", "cams", "rel_pos", "bbox"], drop_mask=dropped, NC=6)
+         
+      """
       if 'drop_cond_mask' in model_kwargs:
          model_kwargs['drop_cond_mask'] = torch.reshape(dropped, model_kwargs['drop_cond_mask'].shape)
       """
@@ -238,15 +232,18 @@ class UCGMScheduler(FewstepScheduler):
          model_module.camera_embedder.uncond_cam.to(device),
          model_module.frame_embedder.uncond_cam.to(device),
          nulls['y'],
-         ["y", "cams", "rel_pos", "bbox", "maps"], append=False)
+         ["y", "cams", "rel_pos", "bbox"], append=False)
 
 
-      t = self.sample_beta(self.time_dist_ctrl[0], self.time_dist_ctrl[1], [x_start.size(0)])
+      t = self.sample_beta(self.time_dist_ctrl[0], self.time_dist_ctrl[1], [x_start.size(0), 1, 1, 1, 1])
       t = t.to(x_start.device)
       t0 = t
       if self.use_timestep_transform:
-         # t现在已经是1D tensor，直接调用timestep_transform
-         t = timestep_transform(t, model_kwargs, num_timesteps=1, cog_style=self.cog_style_trans)
+         # 对5D tensor的transform处理，需要flatten处理
+         t_flat = t.flatten()  # [B*1*1*1*1] -> [B]
+         t_transformed = timestep_transform(t_flat, model_kwargs, num_timesteps=1, cog_style=self.cog_style_trans)
+         # 重新reshape为5D
+         t = t_transformed.view(-1, 1, 1, 1, 1)
       t = torch.clamp(t * self.time_dist_ctrl[2], min=0, max=1)
       t = t.to(x_start)
 
@@ -310,14 +307,8 @@ class UCGMScheduler(FewstepScheduler):
                   model_for_consist = model
                _, _, F_th_r, den_r, consist_outs = self.forward(model_for_consist, xr, r, **model_kwargs)
                if self.enhanced_ratio != 0.0:  # use enhanced zs_target & enhanced xs_target
-                  # Fix broadcasting issue: ensure proper tensor dimensions
-                  alpha_r = torch.as_tensor(self.alpha_in(r), device=zs_target.device, dtype=zs_target.dtype).view(-1, 1, 1, 1, 1)
-                  gamma_r = torch.as_tensor(self.gamma_in(r), device=xs_target.device, dtype=xs_target.dtype).view(-1, 1, 1, 1, 1)
-                  xr = zs_target * alpha_r + xs_target * gamma_r
-               # Fix broadcasting for pred_x calculation
-               alpha_r = torch.as_tensor(self.alpha_in(r), device=F_th_r.device, dtype=F_th_r.dtype).view(-1, 1, 1, 1, 1)
-               alpha_to_r = torch.as_tensor(self.alpha_to(r), device=xr.device, dtype=xr.dtype).view(-1, 1, 1, 1, 1)
-               pred_x = (F_th_r * alpha_r - xr * alpha_to_r) / den_r
+                  xr = zs_target * self.alpha_in(r) + xs_target * self.gamma_in(r)
+               pred_x = (F_th_r * self.alpha_in(r) - xr * self.alpha_to(r)) / den_r
                return pred_x, consist_outs
 
             # Calculate the derivative of f^x_t w.r.t. t
@@ -330,23 +321,21 @@ class UCGMScheduler(FewstepScheduler):
             else:
                epsilon = t - self.consistc_ratio * t
                fc1_dt = 1 / epsilon
-               # Fix broadcasting issue: ensure proper tensor dimensions
-               alpha_t = torch.as_tensor(self.alpha_in(t), device=zs_target.device, dtype=zs_target.dtype).view(-1, 1, 1, 1, 1)
-               gamma_t = torch.as_tensor(self.gamma_in(t), device=xs_target.device, dtype=xs_target.dtype).view(-1, 1, 1, 1, 1)
-               alpha_to_t = torch.as_tensor(self.alpha_to(t), device=F_th_t.device, dtype=F_th_t.dtype).view(-1, 1, 1, 1, 1)
-               x_t = zs_target * alpha_t + xs_target * gamma_t
-               predict_ex = F_th_t.data * alpha_t - x_t * alpha_to_t
+               x_t = zs_target * self.alpha_in(t) + xs_target * self.gamma_in(t)
+               predict_ex = F_th_t.data * self.alpha_in(t) - x_t * self.alpha_to(t)
                x_t_minus_e, x_t_minus_outs = xfunc(t - epsilon)
                df_dv_dt = predict_ex / den_t * fc1_dt - x_t_minus_e * fc1_dt
             # Calculate the learning target for F_{\theta}
             df_dv_dt = torch.clamp(df_dv_dt, min=-1, max=1)
             # weight_fc = 4 / torch.sin(t * np.pi / 2).clamp(min=0.01)
             weight_fc = 4 / torch.sin(t * 1.57)
-            # Fix broadcasting issue: ensure proper tensor dimensions
-            alpha_t_final = torch.as_tensor(self.alpha_in(t), device=F_th_t.device, dtype=F_th_t.dtype).view(-1, 1, 1, 1, 1)
-            target = F_th_t.data - (alpha_t_final / den_t * weight_fc.view(-1, 1, 1, 1, 1)) * df_dv_dt
+            target = F_th_t.data - (self.alpha_in(t) / den_t * weight_fc) * df_dv_dt
       # Fix: NC should be number of cameras, not batch size
       # cams shape: [B*NC, T, 1, 3, 7], so NC = cams.shape[0] // B
+
+      #rank = torch.cuda.current_device()
+      #web_pdb.set_trace(host='127.0.0.1', port=5599+rank) 
+
       B = x_start.shape[0]
       NC = model_kwargs['cams'].shape[0] // B
       diffusion_loss = self.loss_func(F_th_t, target, NC=NC)
@@ -430,7 +419,6 @@ class UCGMScheduler(FewstepScheduler):
               guidance_scale=None,
               nulls={},
               progress=True,):
-
       if guidance_scale is None:
          guidance_scale = self.cfg_scale
 
@@ -464,7 +452,7 @@ class UCGMScheduler(FewstepScheduler):
       t_steps = 1 - t_steps
       # t_steps = 1 - torch.arange(num_steps, dtype=torch.float64) / num_steps
       # t_steps = t_steps[:-1] if (self.rfba_gap_steps[1] - 0.0) == 0 else t_steps
-      print(t_steps)
+      #print(t_steps)
       
       # if self.use_timestep_transform:
       #    t_steps = torch.stack([timestep_transform(
@@ -472,11 +460,11 @@ class UCGMScheduler(FewstepScheduler):
       #       cog_style=self.cog_style_trans) for _t in t_steps], dim=0)
       
       t_steps = self.kumaraswamy_transform(t_steps, *self.infer_time_dist_ctrl)
-      print(t_steps)
+      #print(t_steps)
       t_steps = torch.cat([t_steps, torch.zeros_like(t_steps[:1])])
       t_steps = t_steps.to(z)
       # t_steps = torch.cat([(1 - t_steps), torch.zeros_like(t_steps[:1])])
-      print(t_steps)
+      #print(t_steps)
 
       # Prepare the buffer for the first order prediction
       x_hats, z_hats, buffer_freq = [], [], 1
@@ -487,7 +475,7 @@ class UCGMScheduler(FewstepScheduler):
       else:
          noise_mask = None
 
-      # 添加模型解包逻辑
+      # 模型解包
       if hasattr(model, 'module'):
           model_module = model.module
       else:
@@ -496,7 +484,7 @@ class UCGMScheduler(FewstepScheduler):
       # cfg准备
       if self.with_cfg and guidance_scale:
          null_model_kwargs = replace_with_null_condition(
-            model_kwargs.copy(),
+            copy.deepcopy(model_kwargs),
             model_module.camera_embedder.uncond_cam.to(device),
             model_module.frame_embedder.uncond_cam.to(device),
             y_null,
@@ -512,9 +500,7 @@ class UCGMScheduler(FewstepScheduler):
       dtype = z.dtype
       
       for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
-         # 扩展时间步为batch维度
-         t_cur = t_cur.expand(B)
-         t_next = t_next.expand(B)
+
          is_last_step = i == num_steps - 1
 
          x_next = self.sample_step(model, x_cur, t_cur, model_kwargs, t_next,

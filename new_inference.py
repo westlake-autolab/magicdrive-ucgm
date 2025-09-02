@@ -460,7 +460,7 @@ def main():
                 # == add null condition ==
                 # y is handled by scheduler.sample
                 if cfg.scheduler.type == "dpm-solver" and cfg.scheduler.cfg_scale == 1.0 or (
-                    cfg.scheduler.type in ["rflow-slice",]
+                    cfg.scheduler.type in ["rflow-slice", "ucgm"]  # 🔑 ADDED: ucgm支持
                 ):
                     _model_args = copy.deepcopy(model_args)
                 else:

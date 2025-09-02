@@ -13,31 +13,33 @@ dtype = "bf16"
 scheduler = dict(
     type="ucgm",  # 🔑 CHANGED: 使用UCGM consistency model
     transport_type="Linear",
-    consistc_ratio=0.0,  # 🔑 CHANGED: multi-step模式匹配训练
+    consistc_ratio=1.0,  # 🔑 CHANGED: multi-step模式匹配训练
     enhanced_target_config=dict(
+        lab_drop_ratio= 0.1,
         enhanced_use_ema=True,
-        enhanced_ratio=0.5,
+        enhanced_ratio=2,
         enhanced_style="fc-vs-fe",  # 🔑 CHANGED: multi-step增强模式
         enhanced_range=[0.00, 0.75],
     ),
     loss_config=dict(
-        scaled_cbl_eps=0.0,
+        scaled_cbl_eps=5.0,
         wt_cosine_loss=False,
-        weight_function=None,
+        weight_function="Cosine",
         dispersive_loss_weight=None,
         mean_var_loss_weight=None,
     ),
     time_dist_ctrl=[1.0, 1.0, 1.0],
     infer_config=dict(
         time_dist_ctrl=[1.0, 1.0, 1.0],
-        stochast_ratio=0.0,  # 🔑 CHANGED: multi-step确定性采样
+        stochast_ratio=0.0,
         extrapol_ratio=0.0,
         sampling_order=1,
-        rfba_gap_steps=[0.001, 0.001],  # 🔑 CHANGED: multi-step时间步范围
+        rfba_gap_steps=[0.001, 0.6],  # 🔑 CHANGED: multi-step时间步范围
     ),
     use_timestep_transform=True,
     cog_style_trans=True,  # NOTE: trigger error with 9-frame, should change in all cases when frame > 1.
-    num_sampling_steps=4,   # 🔑 CHANGED: multi-step需要更多步数
+    num_sampling_steps=100,   # 🔑 CHANGED: multi-step需要更多步数
+    num_infer_sampling_steps=8,  # 🔑 明确指定推理步数
     cfg_scale=2.0,  # 🔑 CHANGED: 启用CFG (1.0=无CFG, 2.0=标准CFG)
 )
 
